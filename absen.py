@@ -18,17 +18,31 @@ now = datetime.now(WIB)
 today_str = now.strftime("%Y-%m-%d")
 time_str = now.strftime("%H:%M:%S")
 
-# Jadwal Mapel Harian Otomatis
+# Jadwal Mapel Tetap (Senin - Jumat)
 MAPEL_HARIAN = {
     0: "Bahasa Indonesia",  # Senin
-    1: "Matematika",  # Selasa
-    2: "Bahasa Inggris",  # Rabu
-    3: "Kejuruan",  # Kamis
-    4: "Kegiatan Jumat / Non-KBM",
-    5: "Libur",
-    6: "Libur",
+    1: "Matematika",        # Selasa
+    2: "Bahasa Inggris",    # Rabu
+    3: "KIK",               # Kamis
+    4: "Kejuruan",          # Jumat
 }
-mapel_hari_ini = MAPEL_HARIAN.get(now.weekday(), "Lainnya")
+
+# Pilihan Mapel Khusus Sabtu & Minggu (5 Mapel Utama)
+PILIHAN_MAPEL_AKHIR_PEKAN = [
+    "-- Pilih Mata Pelajaran --",
+    "Bahasa Indonesia",
+    "Matematika",
+    "Bahasa Inggris",
+    "KIK",
+    "Kejuruan",
+]
+
+# Deteksi Hari: Sabtu (5) atau Minggu (6)
+is_akhir_pekan = now.weekday() in [5, 6]
+mapel_terpilih = None
+
+if not is_akhir_pekan:
+    mapel_terpilih = MAPEL_HARIAN.get(now.weekday())
 
 # 2. Master Data Siswa Kelas XII (Hasil Ekstrak File Excel)
 DATA_SISWA_PER_KELAS = {
@@ -616,6 +630,45 @@ def init_worksheet(client, spreadsheet_title, sheet_name):
     return ws
 
 
+def rekap_otomatis_tidak_hadir(client, spreadsheet_title, kelas, daftar_siswa_kelas, tanggal_kemarin, mapel_kemarin):
+    """
+    Mengecek siswa yang belum absen pada hari sebelumnya dan mencatatnya sebagai 'Tidak Hadir'.
+    """
+    try:
+        sh = client.open(spreadsheet_title)
+        ws = sh.worksheet(kelas)
+    except Exception:
+        return
+
+    records = ws.get_all_records()
+    if not records:
+        return
+
+    df_sheet = pd.DataFrame(records)
+    if "Tanggal" not in df_sheet.columns or "Nama Siswa" not in df_sheet.columns:
+        return
+
+    # Ambil siswa yang sudah tercatat pada tanggal kemarin
+    df_kemarin = df_sheet[df_sheet["Tanggal"] == tanggal_kemarin]
+    siswa_sudah_tercatat = set(df_kemarin["Nama Siswa"].tolist())
+
+    # Cari siswa yang BELUM ada datanya sama sekali di tanggal kemarin
+    baris_tidak_hadir = []
+    for nama in daftar_siswa_kelas:
+        if nama not in siswa_sudah_tercatat:
+            baris_tidak_hadir.append([
+                tanggal_kemarin,
+                "23:59:59",
+                nama,
+                "Tidak Hadir",
+                mapel_kemarin
+            ])
+
+    # Tambahkan sekaligus ke Google Sheet
+    if baris_tidak_hadir:
+        ws.append_rows(baris_tidak_hadir)
+
+
 SPREADSHEET_NAME = "Database_Presensi_Siswa"
 
 try:
@@ -629,32 +682,64 @@ st.title("📝 Presensi Siswa Mandiri")
 st.caption(
     f"📅 **{now.strftime('%A, %d %B %Y')}** | ⏰ **{time_str} WIB**"
 )
-st.info(f"📚 **Mata Pelajaran Hari Ini:** {mapel_hari_ini}")
+# Tampilan Informasi Mapel Hari Ini
+if not is_akhir_pekan:
+    st.info(f"📚 **Mata Pelajaran Hari Ini:** {mapel_terpilih}")
+else:
+    st.warning(
+        "📅 **Hari Akhir Pekan (Sabtu/Minggu):** Silakan pilih mata pelajaran yang diikuti.")
 
 st.markdown("---")
 
-# Dropdown Bertingkat: Kelas -> Nama Siswa
+# Dropdown Kelas
 pilihan_kelas = list(DATA_SISWA_PER_KELAS.keys())
 kelas_terpilih = st.selectbox(
     "1. Pilih Kelas:",
     options=["-- Pilih Kelas --"] + pilihan_kelas,
-    index=0,
+    index=0
 )
 
 if kelas_terpilih != "-- Pilih Kelas --":
     daftar_nama = sorted(DATA_SISWA_PER_KELAS[kelas_terpilih])
+# Cek & rekap otomatis siswa yang tidak hadir di hari KBM sebelumnya
+    kemarin = now - timedelta(days=1)
+    kemarin_str = kemarin.strftime("%Y-%m-%d")
 
+    if kemarin.weekday() in MAPEL_HARIAN:
+        mapel_kemarin = MAPEL_HARIAN[kemarin.weekday()]
+        rekap_otomatis_tidak_hadir(
+            gc,
+            SPREADSHEET_NAME,
+            kelas_terpilih,
+            daftar_nama,
+            kemarin_str,
+            mapel_kemarin
+        )
     nama_terpilih = st.selectbox(
         f"2. Pilih Nama Siswa ({kelas_terpilih}):",
         options=["-- Pilih Nama --"] + daftar_nama,
-        index=0,
+        index=0
     )
+
+    # Dropdown hanya muncul di hari Sabtu dan Minggu
+    if is_akhir_pekan:
+        mapel_input = st.selectbox(
+            "3. Pilih Mata Pelajaran:",
+            options=PILIHAN_MAPEL_AKHIR_PEKAN,
+            index=0
+        )
+        if mapel_input != "-- Pilih Mata Pelajaran --":
+            mapel_terpilih = mapel_input
+        else:
+            mapel_terpilih = None
 
     st.write("")
 
     if st.button("🚀 Kirim Presensi Hadir", use_container_width=True):
         if nama_terpilih == "-- Pilih Nama --":
-            st.error("Pilih nama Anda terlebih dahulu!")
+            st.error("Silakan pilih nama Anda terlebih dahulu!")
+        elif is_akhir_pekan and not mapel_terpilih:
+            st.error("Silakan pilih mata pelajaran terlebih dahulu!")
         else:
             with st.spinner("Mencatat ke Google Sheets..."):
                 ws = init_worksheet(gc, SPREADSHEET_NAME, kelas_terpilih)
@@ -663,37 +748,29 @@ if kelas_terpilih != "-- Pilih Kelas --":
                     records = ws.get_all_records()
                     sudah_absen = False
 
-                    # Pengecekan 1 kali absen per tanggal (reset otomatis jam 00.01)
                     if records:
                         df_sheet = pd.DataFrame(records)
-                        if (
-                            "Tanggal" in df_sheet.columns
-                            and "Nama Siswa" in df_sheet.columns
-                        ):
+                        if "Tanggal" in df_sheet.columns and "Nama Siswa" in df_sheet.columns:
                             cek = df_sheet[
-                                (df_sheet["Tanggal"] == today_str)
-                                & (df_sheet["Nama Siswa"] == nama_terpilih)
+                                (df_sheet["Tanggal"] == today_str) &
+                                (df_sheet["Nama Siswa"] == nama_terpilih)
                             ]
                             if not cek.empty:
                                 sudah_absen = True
 
                     if sudah_absen:
                         st.warning(
-                            f"⚠️ **{nama_terpilih}** ({kelas_terpilih}) sudah absen hari ini ({today_str}). Sampai jumpa besok!"
-                        )
+                            f"⚠️ **{nama_terpilih}** ({kelas_terpilih}) sudah absen hari ini ({today_str}). Sampai jumpa besok!")
                     else:
-                        ws.append_row(
-                            [
-                                today_str,
-                                time_str,
-                                nama_terpilih,
-                                "Hadir",
-                                mapel_hari_ini,
-                            ]
-                        )
+                        ws.append_row([
+                            today_str,
+                            time_str,
+                            nama_terpilih,
+                            "Hadir",
+                            mapel_terpilih
+                        ])
                         st.balloons()
                         st.success(
-                            f"✅ Berhasil! **{nama_terpilih}** tercatat **Hadir**."
-                        )
+                            f"✅ Berhasil! **{nama_terpilih}** tercatat **Hadir** untuk mapel **{mapel_terpilih}**.")
 else:
     st.info("👆 Silakan pilih kelas terlebih dahulu.")
