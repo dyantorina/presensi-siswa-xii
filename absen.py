@@ -21,8 +21,8 @@ time_str = now.strftime("%H:%M:%S")
 # Jadwal Mapel Tetap (Senin - Jumat)
 MAPEL_HARIAN = {
     0: "Bahasa Indonesia",  # Senin
-    1: "Matematika",        # Selasa
-    2: "Bahasa Inggris",    # Rabu
+    1: "Bahasa Inggris",        # Selasa
+    2: "Matematika",    # Rabu
     3: "KIK",               # Kamis
     4: "Kejuruan",          # Jumat
 }
